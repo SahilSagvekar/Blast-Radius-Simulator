@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // url      = env("DATABASE_URL")
+}
+
+enum Criticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ServiceStatus {
+  HEALTHY
+  DEGRADED
+  FAILED
+}
+
+enum DependencyType {
+  HARD 
+  SOFT 
+}
+
+enum ImpactStatus {
+  DIRECT     
+  INDIRECT 
+  DEGRADED   
+  UNAFFECTED 
+}
+
+model Service {
+  id          String        @id @default(cuid())
+  name        String        @unique
+  description String?
+  owner       String?
+  criticality Criticality   @default(MEDIUM)
+  status      ServiceStatus @default(HEALTHY)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Edges where this service is the one with the dependency ("I depend on X").
+  dependencies Dependency[] @relation("DependentService")
+  // Edges where other services depend on this one ("X depends on me").
+  dependents   Dependency[] @relation("DependsOnService")
+
+  simulationTargets SimulationTarget[]
+  simulationResults  SimulationResult[]
+
+  @@index([status])
+  @@index([criticality])
+}
+
+model Dependency {
+  id          String         @id @default(cuid())
+  dependentId String // the service that has the dependency
+  dependsOnId String // the service being depended on
+  type        DependencyType @default(HARD)
+  createdAt   DateTime       @default(now())
+
+  dependent Service @relation("DependentService", fields: [dependentId], references: [id], onDelete: Cascade)
+  dependsOn Service @relation("DependsOnService", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([dependentId, dependsOnId])
+  @@index([dependentId])
+  @@index([dependsOnId])
+}
+
+model Simulation {
+  id          String   @id @default(cuid())
+  name        String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  // Services chosen as the initial failure input for this run.
+  targets SimulationTarget[]
+  results SimulationResult[]
+
+  @@index([createdAt])
+}
+
+// Join table: which services were deliberately failed to trigger this simulation.
+model SimulationTarget {
+  id           String     @id @default(cuid())
+  simulationId String
+  serviceId    String
+
+  simulation Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  service    Service    @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([simulationId, serviceId])
+}
+
+// One row per impacted service per simulation, with enough detail to
+// reconstruct "why" without re-running the algorithm.
+model SimulationResult {
+  id             String       @id @default(cuid())
+  simulationId   String
+  serviceId      String
+  impactStatus   ImpactStatus
+  depth          Int // hop distance from the nearest failed service (0 = DIRECT)
+  severityScore  Float // 0-100, see Architecture.md for the formula
+  path           Json // string[] of service IDs from a failed root to this service
+
+  simulation Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  service    Service    @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([simulationId, serviceId])
+  @@index([simulationId])
+  @@index([impactStatus])
+}
